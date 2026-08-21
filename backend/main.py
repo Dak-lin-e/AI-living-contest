@@ -6,6 +6,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Header
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = str(PROJECT_ROOT / "data" / "app.db")
@@ -102,6 +103,12 @@ class ScenarioInput(BaseModel):
     monthly_expenses: float = Field(ge=0)
     savings_level: str = Field(default="", max_length=100)
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 init_db()
 GUEST_USER_ID = 1
 def current_user_id(authorization: str | None = None) -> int:
