@@ -66,6 +66,7 @@ class ComicInput(BaseModel):
     product_category: str = Field(min_length=1, max_length=100)
     annual_rate: float = Field(ge=0, le=100)
     years: int = Field(ge=1, le=30)
+    product_term_months: float = Field(default=0, ge=0)
     job: str = Field(min_length=1, max_length=100)
     income_level: str = Field(default="", max_length=100)
     credit_score: int = Field(ge=0, le=1000)
@@ -243,10 +244,31 @@ def health():
 def _money(amount: float) -> int:
     return int(round(float(amount)))
 
-def _mid_period_label(years: int) -> str:
-    if years >= 2:
-        return f"{years // 2}년"
-    return f"{round(years * 6)}개월"
+_QUARTER_INTERVAL_CANDIDATES = (3, 6, 12, 24, 36, 60, 120)
+def _resolve_total_months(years: int, product_term_months: float) -> int:
+    if product_term_months and product_term_months > 0:
+        return int(round(product_term_months))
+    return max(1, int(years)) * 12
+def _quarterly_months(total_months: int, max_points: int = 13) -> list[int]:
+    total_months = max(1, int(round(total_months)))
+    interval = _QUARTER_INTERVAL_CANDIDATES[-1]
+    for candidate in _QUARTER_INTERVAL_CANDIDATES:
+        if total_months // candidate + 1 <= max_points:
+            interval = candidate
+            break
+    steps = list(range(0, total_months, interval))
+    if steps[-1] != total_months:
+        steps.append(total_months)
+    return steps
+def _month_label(month: int) -> str:
+    if month <= 0:
+        return "시작"
+    years, rem = divmod(month, 12)
+    if rem == 0:
+        return f"{years}년"
+    if years == 0:
+        return f"{rem}개월"
+    return f"{years}년 {rem}개월"
 
 def _product_type(category: str) -> str:
     if '예금' in category:
@@ -383,6 +405,7 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
         monthly_expense = float(item.rent_monthly_expenses or monthly_expenses or 0)
         monthly_burden = loan_amount * (annual_rate / 100) / 12
         total_interest = loan_amount * (annual_rate / 100) * years
+        total_months = _resolve_total_months(years, item.product_term_months)
         summary = f"전세보증금 {money_format(deposit)}원 중 자기자금 {money_format(self_fund)}원을 쓰고 나머지 {money_format(loan_amount)}원은 대출로 맞추면, {years}년 동안 월 부담은 약 {money_format(monthly_burden)}원이고 총 이자는 약 {money_format(total_interest)}원 정도로 보여요."
         key_metrics = [
             {"label": "전세보증금", "value": _money(deposit), "unit": "원"},
@@ -406,9 +429,8 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
                 "title": "대출 기간 흐름",
                 "description": "전세자금대출은 시간이 지날수록 이자가 붙어 부담이 커지는 구조로 보여줘요.",
                 "data": [
-                    {"label": "시작", "value": _money(loan_amount)},
-                    {"label": _mid_period_label(years), "value": _money(loan_amount + total_interest * 0.5)},
-                    {"label": f"{years}년", "value": _money(loan_amount + total_interest)},
+                    {"label": _month_label(m), "value": _money(loan_amount + total_interest * (m / total_months))}
+                    for m in _quarterly_months(total_months)
                 ],
             },
         ]
@@ -449,6 +471,7 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
             {"term": "세후 이자", "meaning": "세금을 낸 뒤 실제로 내 손에 들어오는 이자예요."},
         ]
     elif product_type == '적금':
+        total_months = _resolve_total_months(years, item.product_term_months)
         summary = f"매달 조금씩 넣는 구조라면 {years}년 뒤에는 약 {money_format(final_value)}원이 되고, 이자는 약 {money_format(interest)}원 정도 더 붙어요."
         key_metrics = [
             {"label": "현재 자산 기준", "value": _money(principal), "unit": "원"},
@@ -457,7 +480,10 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
             {"label": "예상 수익률", "value": round(((final_value - principal) / principal * 100) if principal else 0.0, 1), "unit": "%"},
         ]
         visualizations = [
-            {"type": "line_chart", "title": "시간이 지나면 돈이 커져요", "description": "초반에는 조금 느리게 보이지만, 시간이 지나면 자산이 점점 늘어나는 모습을 보여줘요.", "data": [{"label": "현재", "value": _money(principal)}, {"label": f"{max(1, years // 2)}년", "value": _money(principal * ((1 + annual_rate / 100) ** max(1, years // 2)))}, {"label": f"{years}년", "value": _money(final_value)}]},
+            {"type": "line_chart", "title": "시간이 지나면 돈이 커져요", "description": "초반에는 조금 느리게 보이지만, 시간이 지나면 자산이 점점 늘어나는 모습을 보여줘요.", "data": [
+                {"label": _month_label(m), "value": _money(principal * ((1 + annual_rate / 100) ** (m / 12)))}
+                for m in _quarterly_months(total_months)
+            ]},
             {"type": "donut_chart", "title": "원금과 이자 비중", "description": "처음 넣은 돈과 이자가 어떤 비중인지 한눈에 볼 수 있어요.", "data": [{"label": "원금", "value": _money(principal)}, {"label": "이자", "value": _money(interest)}]},
         ]
         explanation = [
@@ -475,6 +501,7 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
     else:
         total_interest = principal * (annual_rate / 100) * years
         total_payment = principal + total_interest
+        total_months = _resolve_total_months(years, item.product_term_months)
         summary = f"전세자금대출을 쓰면 {years}년 뒤에는 총 이자가 약 {money_format(total_interest)}원 들어가고, 전체 부담은 약 {money_format(total_payment)}원 정도로 보여요."
         key_metrics = [
             {"label": "전세보증금", "value": _money(principal), "unit": "원"},
@@ -484,7 +511,10 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
         ]
         visualizations = [
             {"type": "bar_chart", "title": "대출 전후의 부담 차이", "description": "보증금과 대출을 같이 쓰는 구조에서 어떤 돈이 들어오고 나가는지 보여줘요.", "data": [{"label": "본인 부담금", "value": _money(principal)}, {"label": "대출금", "value": _money(principal)}]},
-            {"type": "timeline", "title": "대출 기간 동안의 흐름", "description": "시간이 지나면서 이자가 얼마나 늘어나는지 간단히 보여줘요.", "data": [{"label": "시작", "value": _money(principal)}, {"label": _mid_period_label(years), "value": _money(principal + total_interest * 0.5)}, {"label": f"{years}년", "value": _money(principal + total_interest)}]},
+            {"type": "timeline", "title": "대출 기간 동안의 흐름", "description": "시간이 지나면서 이자가 얼마나 늘어나는지 간단히 보여줘요.", "data": [
+                {"label": _month_label(m), "value": _money(principal + total_interest * (m / total_months))}
+                for m in _quarterly_months(total_months)
+            ]},
         ]
         explanation = [
             "전세자금대출은 집을 살 때 필요한 보증금을 조금 덜 내도록 도와주는 구조예요.",
