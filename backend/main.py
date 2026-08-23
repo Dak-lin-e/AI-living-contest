@@ -270,6 +270,20 @@ def _month_label(month: int) -> str:
         return f"{rem}개월"
     return f"{years}년 {rem}개월"
 
+_PERIOD_METRIC_LABELS = {
+    "예금": "예치 기간",
+    "적금": "적립 기간",
+    "주택담보대출": "대출 기간",
+    "전세자금대출": "대출 기간",
+    "개인신용대출": "대출 기간",
+}
+def _period_metric(product_type: str, total_months: int) -> dict:
+    label = _PERIOD_METRIC_LABELS.get(product_type, "기간")
+    years, rem = divmod(max(1, int(round(total_months))), 12)
+    if rem == 0:
+        return {"label": label, "value": years, "unit": "년"}
+    return {"label": label, "value": int(round(total_months)), "unit": "개월"}
+
 def _product_type(category: str) -> str:
     if '예금' in category:
         return '예금'
@@ -293,6 +307,7 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
     final_value = principal * ((1 + annual_rate / 100) ** years)
     interest = max(final_value - principal, 0.0)
     product_type = _product_type(item.product_category)
+    total_months = _resolve_total_months(years, item.product_term_months)
 
     if product_type == '주택담보대출':
         house_price = float(item.house_price or 0)
@@ -405,7 +420,6 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
         monthly_expense = float(item.rent_monthly_expenses or monthly_expenses or 0)
         monthly_burden = loan_amount * (annual_rate / 100) / 12
         total_interest = loan_amount * (annual_rate / 100) * years
-        total_months = _resolve_total_months(years, item.product_term_months)
         summary = f"전세보증금 {money_format(deposit)}원 중 자기자금 {money_format(self_fund)}원을 쓰고 나머지 {money_format(loan_amount)}원은 대출로 맞추면, {years}년 동안 월 부담은 약 {money_format(monthly_burden)}원이고 총 이자는 약 {money_format(total_interest)}원 정도로 보여요."
         key_metrics = [
             {"label": "전세보증금", "value": _money(deposit), "unit": "원"},
@@ -471,7 +485,6 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
             {"term": "세후 이자", "meaning": "세금을 낸 뒤 실제로 내 손에 들어오는 이자예요."},
         ]
     elif product_type == '적금':
-        total_months = _resolve_total_months(years, item.product_term_months)
         summary = f"매달 조금씩 넣는 구조라면 {years}년 뒤에는 약 {money_format(final_value)}원이 되고, 이자는 약 {money_format(interest)}원 정도 더 붙어요."
         key_metrics = [
             {"label": "현재 자산 기준", "value": _money(principal), "unit": "원"},
@@ -501,7 +514,6 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
     else:
         total_interest = principal * (annual_rate / 100) * years
         total_payment = principal + total_interest
-        total_months = _resolve_total_months(years, item.product_term_months)
         summary = f"전세자금대출을 쓰면 {years}년 뒤에는 총 이자가 약 {money_format(total_interest)}원 들어가고, 전체 부담은 약 {money_format(total_payment)}원 정도로 보여요."
         key_metrics = [
             {"label": "전세보증금", "value": _money(principal), "unit": "원"},
@@ -529,6 +541,7 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
             {"term": "총 이자", "meaning": "대출 기간 동안 추가로 내야 하는 돈을 모두 더한 금액이에요."},
         ]
 
+    key_metrics = [*key_metrics, _period_metric(product_type, total_months)]
     return {"summary": summary, "productType": product_type, "keyMetrics": key_metrics, "visualizations": visualizations, "explanation": explanation, "cautions": cautions, "simple_terms": simple_terms}
 
 
@@ -644,10 +657,16 @@ def _call_openai_financial_summary(item: ComicInput) -> dict | None:
         if not isinstance(parsed, dict):
             return None
         fallback = build_financial_coach_summary(item)
+        raw_ai_metrics = _normalize_ai_key_metrics(parsed.get("keyMetrics"))
+        if raw_ai_metrics:
+            correct_period = _period_metric(_product_type(item.product_category), _resolve_total_months(int(item.years), item.product_term_months))
+            ai_key_metrics = [m for m in raw_ai_metrics if "기간" not in str(m.get("label", ""))] + [correct_period]
+        else:
+            ai_key_metrics = fallback["keyMetrics"]
         normalized = {
             "summary": str(parsed.get("summary") or fallback["summary"]),
             "productType": str(parsed.get("productType") or _product_type(item.product_category)),
-            "keyMetrics": _normalize_ai_key_metrics(parsed.get("keyMetrics")) or fallback["keyMetrics"],
+            "keyMetrics": ai_key_metrics,
             "visualizations": _normalize_ai_visualizations(parsed.get("visualizations")) or fallback["visualizations"],
             "explanation": parsed.get("explanation") or fallback["explanation"],
             "cautions": parsed.get("cautions") or fallback["cautions"],
