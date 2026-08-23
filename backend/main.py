@@ -65,7 +65,7 @@ class ComicInput(BaseModel):
     bank_name: str = Field(min_length=1, max_length=200)
     product_category: str = Field(min_length=1, max_length=100)
     annual_rate: float = Field(ge=0, le=100)
-    years: int = Field(ge=1, le=30)
+    years: float = Field(ge=1 / 12, le=30)
     product_term_months: float = Field(default=0, ge=0)
     job: str = Field(min_length=1, max_length=100)
     income_level: str = Field(default="", max_length=100)
@@ -96,7 +96,7 @@ class ScenarioInput(BaseModel):
     bank_name: str = Field(min_length=1, max_length=200)
     product_category: str = Field(min_length=1, max_length=200)
     annual_rate: float = Field(ge=0, le=100)
-    years: int = Field(ge=1, le=30)
+    years: float = Field(ge=1 / 12, le=30)
     job: str = Field(min_length=1, max_length=100)
     income_level: str = Field(default="", max_length=100)
     credit_score: int = Field(ge=0, le=1000)
@@ -245,10 +245,11 @@ def _money(amount: float) -> int:
     return int(round(float(amount)))
 
 _QUARTER_INTERVAL_CANDIDATES = (3, 6, 12, 24, 36, 60, 120)
-def _resolve_total_months(years: int, product_term_months: float) -> int:
-    if product_term_months and product_term_months > 0:
-        return int(round(product_term_months))
-    return max(1, int(years)) * 12
+def _resolve_total_months(years: float, product_term_months: float = 0) -> int:
+    # The frontend's duration input is in months and defaults from the product's
+    # disclosed term, but the user can freely override it. Whatever they submit
+    # (years, converted from months) is authoritative for the actual simulation.
+    return max(1, round(float(years) * 12))
 def _quarterly_months(total_months: int, max_points: int = 13) -> list[int]:
     total_months = max(1, int(round(total_months)))
     interval = _QUARTER_INTERVAL_CANDIDATES[-1]
@@ -283,6 +284,13 @@ def _period_metric(product_type: str, total_months: int) -> dict:
     if rem == 0:
         return {"label": label, "value": years, "unit": "년"}
     return {"label": label, "value": int(round(total_months)), "unit": "개월"}
+def _rate_metric(annual_rate: float) -> dict:
+    return {"label": "연 금리", "value": round(float(annual_rate), 2), "unit": "%"}
+def _is_rate_label(label: str) -> bool:
+    normalized = str(label or "").replace(" ", "")
+    if "수익률" in normalized or "부담률" in normalized:
+        return False
+    return "금리" in normalized or "이자율" in normalized
 
 def _product_type(category: str) -> str:
     if '예금' in category:
@@ -301,13 +309,14 @@ def _product_type(category: str) -> str:
 def build_financial_coach_summary(item: ComicInput) -> dict:
     principal = float(item.assets)
     annual_rate = float(item.annual_rate)
-    years = int(item.years)
+    years = float(item.years)
     debt = float(item.debt)
     monthly_expenses = float(item.monthly_expenses)
     final_value = principal * ((1 + annual_rate / 100) ** years)
     interest = max(final_value - principal, 0.0)
     product_type = _product_type(item.product_category)
     total_months = _resolve_total_months(years, item.product_term_months)
+    period_text = _month_label(total_months)
 
     if product_type == '주택담보대출':
         house_price = float(item.house_price or 0)
@@ -319,7 +328,7 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
         monthly_burden = loan_amount * (annual_rate / 100) / 12
         total_interest = loan_amount * (annual_rate / 100) * years
         total_repayment = loan_amount + total_interest
-        summary = f"주택가격 {money_format(house_price or loan_amount)}원 기준으로 대출금 {money_format(loan_amount)}원을 빌리면, {years}년 동안 월 부담은 약 {money_format(monthly_burden)}원이고 총이자는 약 {money_format(total_interest)}원이에요."
+        summary = f"주택가격 {money_format(house_price or loan_amount)}원 기준으로 대출금 {money_format(loan_amount)}원을 빌리면, {period_text} 동안 월 부담은 약 {money_format(monthly_burden)}원이고 총이자는 약 {money_format(total_interest)}원이에요."
         key_metrics = [
             {"label": "주택가격", "value": _money(house_price or loan_amount), "unit": "원"},
             {"label": "대출 원금", "value": _money(loan_amount), "unit": "원"},
@@ -370,7 +379,7 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
         monthly_burden = loan_amount * (annual_rate / 100) / 12
         total_interest = loan_amount * (annual_rate / 100) * years
         total_repayment = loan_amount + total_interest
-        summary = f"신용대출 {money_format(loan_amount)}원을 받는다면 {years}년 동안 월 부담은 약 {money_format(monthly_burden)}원이고, 총 이자는 약 {money_format(total_interest)}원이에요."
+        summary = f"신용대출 {money_format(loan_amount)}원을 받는다면 {period_text} 동안 월 부담은 약 {money_format(monthly_burden)}원이고, 총 이자는 약 {money_format(total_interest)}원이에요."
         key_metrics = [
             {"label": "대출금액", "value": _money(loan_amount), "unit": "원"},
             {"label": "월 소득", "value": _money(monthly_income), "unit": "원"},
@@ -420,7 +429,7 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
         monthly_expense = float(item.rent_monthly_expenses or monthly_expenses or 0)
         monthly_burden = loan_amount * (annual_rate / 100) / 12
         total_interest = loan_amount * (annual_rate / 100) * years
-        summary = f"전세보증금 {money_format(deposit)}원 중 자기자금 {money_format(self_fund)}원을 쓰고 나머지 {money_format(loan_amount)}원은 대출로 맞추면, {years}년 동안 월 부담은 약 {money_format(monthly_burden)}원이고 총 이자는 약 {money_format(total_interest)}원 정도로 보여요."
+        summary = f"전세보증금 {money_format(deposit)}원 중 자기자금 {money_format(self_fund)}원을 쓰고 나머지 {money_format(loan_amount)}원은 대출로 맞추면, {period_text} 동안 월 부담은 약 {money_format(monthly_burden)}원이고 총 이자는 약 {money_format(total_interest)}원 정도로 보여요."
         key_metrics = [
             {"label": "전세보증금", "value": _money(deposit), "unit": "원"},
             {"label": "자기자금", "value": _money(self_fund), "unit": "원"},
@@ -461,7 +470,7 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
             {"term": "자기자금", "meaning": "대출 없이 내가 직접 마련한 돈이에요."},
         ]
     elif product_type == '예금':
-        summary = f"지금 {money_format(principal)}원을 넣으면 {years}년 뒤에는 약 {money_format(final_value)}원이 되고, 이자는 약 {money_format(interest)}원 더 붙어요."
+        summary = f"지금 {money_format(principal)}원을 넣으면 {period_text} 뒤에는 약 {money_format(final_value)}원이 되고, 이자는 약 {money_format(interest)}원 더 붙어요."
         key_metrics = [
             {"label": "현재 예치금", "value": _money(principal), "unit": "원"},
             {"label": "예상 만기금액", "value": _money(final_value), "unit": "원"},
@@ -485,7 +494,7 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
             {"term": "세후 이자", "meaning": "세금을 낸 뒤 실제로 내 손에 들어오는 이자예요."},
         ]
     elif product_type == '적금':
-        summary = f"매달 조금씩 넣는 구조라면 {years}년 뒤에는 약 {money_format(final_value)}원이 되고, 이자는 약 {money_format(interest)}원 정도 더 붙어요."
+        summary = f"매달 조금씩 넣는 구조라면 {period_text} 뒤에는 약 {money_format(final_value)}원이 되고, 이자는 약 {money_format(interest)}원 정도 더 붙어요."
         key_metrics = [
             {"label": "현재 자산 기준", "value": _money(principal), "unit": "원"},
             {"label": "예상 만기금액", "value": _money(final_value), "unit": "원"},
@@ -514,7 +523,7 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
     else:
         total_interest = principal * (annual_rate / 100) * years
         total_payment = principal + total_interest
-        summary = f"전세자금대출을 쓰면 {years}년 뒤에는 총 이자가 약 {money_format(total_interest)}원 들어가고, 전체 부담은 약 {money_format(total_payment)}원 정도로 보여요."
+        summary = f"전세자금대출을 쓰면 {period_text} 뒤에는 총 이자가 약 {money_format(total_interest)}원 들어가고, 전체 부담은 약 {money_format(total_payment)}원 정도로 보여요."
         key_metrics = [
             {"label": "전세보증금", "value": _money(principal), "unit": "원"},
             {"label": "대출금", "value": _money(principal), "unit": "원"},
@@ -541,7 +550,7 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
             {"term": "총 이자", "meaning": "대출 기간 동안 추가로 내야 하는 돈을 모두 더한 금액이에요."},
         ]
 
-    key_metrics = [*key_metrics, _period_metric(product_type, total_months)]
+    key_metrics = [*key_metrics, _rate_metric(annual_rate), _period_metric(product_type, total_months)]
     return {"summary": summary, "productType": product_type, "keyMetrics": key_metrics, "visualizations": visualizations, "explanation": explanation, "cautions": cautions, "simple_terms": simple_terms}
 
 
@@ -659,8 +668,9 @@ def _call_openai_financial_summary(item: ComicInput) -> dict | None:
         fallback = build_financial_coach_summary(item)
         raw_ai_metrics = _normalize_ai_key_metrics(parsed.get("keyMetrics"))
         if raw_ai_metrics:
-            correct_period = _period_metric(_product_type(item.product_category), _resolve_total_months(int(item.years), item.product_term_months))
-            ai_key_metrics = [m for m in raw_ai_metrics if "기간" not in str(m.get("label", ""))] + [correct_period]
+            correct_period = _period_metric(_product_type(item.product_category), _resolve_total_months(float(item.years), item.product_term_months))
+            correct_rate = _rate_metric(float(item.annual_rate))
+            ai_key_metrics = [m for m in raw_ai_metrics if "기간" not in str(m.get("label", "")) and not _is_rate_label(m.get("label", ""))] + [correct_rate, correct_period]
         else:
             ai_key_metrics = fallback["keyMetrics"]
         normalized = {
