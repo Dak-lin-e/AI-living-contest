@@ -466,7 +466,7 @@ def build_financial_coach_summary(item: ComicInput) -> dict:
             {"label": "현재 예치금", "value": _money(principal), "unit": "원"},
             {"label": "예상 만기금액", "value": _money(final_value), "unit": "원"},
             {"label": "예상 이자", "value": _money(interest), "unit": "원"},
-            {"label": "세후 예상 수령액", "value": _money(final_value * 0.85), "unit": "원"},
+            {"label": "세후 예상 수령액", "value": _money(principal + interest * 0.85), "unit": "원"},
         ]
         visualizations = [
             {"type": "bar_chart", "title": "원금과 이자 구성", "description": "원금은 그대로 있고, 이자가 더 쌓이는 모습을 보여줘요.", "data": [{"label": "원금", "value": _money(principal)}, {"label": "이자", "value": _money(interest)}]},

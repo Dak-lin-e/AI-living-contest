@@ -58,11 +58,11 @@ const DEPOSIT_FORMULA: FormulaGuide = {
   compute: ({ principal, rate, years }) => {
     const finalValue = principal * Math.pow(1 + rate / 100, years)
     const preTaxInterest = Math.max(finalValue - principal, 0)
-    const afterTax = finalValue * 0.85
+    const afterTaxAmount = principal + preTaxInterest * 0.85
     return [
       { label: '만기 예상 수령액', formula: '예치 원금 × (1 + 연 금리)^예치 기간(년)', substituted: `${money(principal)}원 × (1 + ${formatRate(rate)})^${years}`, result: `${money(finalValue)}원` },
       { label: '세전 이자', formula: '만기 예상 수령액 − 예치 원금', substituted: `${money(finalValue)}원 − ${money(principal)}원`, result: `${money(preTaxInterest)}원` },
-      { label: '세후 예상 수령액', formula: '만기 예상 수령액 × 85% (이자소득세 15% 가정)', substituted: `${money(finalValue)}원 × 85%`, result: `${money(afterTax)}원` },
+      { label: '세후 예상 수령액', formula: '예치 원금 + (세전 이자 × 85%, 이자소득세 15% 가정)', substituted: `${money(principal)}원 + (${money(preTaxInterest)}원 × 85%)`, result: `${money(afterTaxAmount)}원` },
     ]
   },
 }
